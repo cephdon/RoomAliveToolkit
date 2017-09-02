@@ -1,10 +1,11 @@
-﻿using System;
+﻿using Microsoft.Kinect;
+using System;
 using System.Collections.Generic;
-using Microsoft.Kinect;
-using RoomAliveToolkit;
+using System.Runtime.Serialization;
 
-namespace Kinect2
+namespace RoomAliveToolkit
 {
+    [DataContract]
     public class Kinect2Calibration
     {
         public const int depthImageWidth = 512;
@@ -12,14 +13,25 @@ namespace Kinect2
         public const int colorImageWidth = 1920;
         public const int colorImageHeight = 1080;
 
-        public Matrix colorCameraMatrix = new RoomAliveToolkit.Matrix(3, 3);
-        public Matrix colorLensDistortion = new RoomAliveToolkit.Matrix(2, 1);
-        public Matrix depthCameraMatrix = new RoomAliveToolkit.Matrix(3, 3);
-        public Matrix depthLensDistortion = new RoomAliveToolkit.Matrix(2, 1);
-        public Matrix depthToColorTransform = new RoomAliveToolkit.Matrix(4, 4);
+        [DataMember]
+        public Matrix colorCameraMatrix;
+        [DataMember]
+        public Matrix colorLensDistortion;
+        [DataMember]
+        public Matrix depthCameraMatrix;
+        [DataMember]
+        public Matrix depthLensDistortion;
+        [DataMember]
+        public Matrix depthToColorTransform;
 
         public void RecoverCalibrationFromSensor(KinectSensor kinectSensor)
         {
+            colorCameraMatrix = new RoomAliveToolkit.Matrix(3, 3);
+            colorLensDistortion = new RoomAliveToolkit.Matrix(2, 1);
+            depthCameraMatrix = new RoomAliveToolkit.Matrix(3, 3);
+            depthLensDistortion = new RoomAliveToolkit.Matrix(2, 1);
+            depthToColorTransform = new RoomAliveToolkit.Matrix(4, 4);
+
             var stopWatch = new System.Diagnostics.Stopwatch();
             stopWatch.Start();
 
@@ -80,8 +92,7 @@ namespace Kinect2
             var rotation = new Matrix(3, 1);
             var translation = new Matrix(3, 1);
             var colorError = CalibrateColorCamera(objectPoints1, colorPoints1, colorCameraMatrix, colorLensDistortion, rotation, translation);
-            //var rotationMatrix = Orientation.Rodrigues(rotation);
-            var rotationMatrix = RoomAliveToolkit.ProjectorCameraEnsemble.RotationMatrixFromRotationVector(rotation);
+            var rotationMatrix = CameraMath.RotationMatrixFromRotationVector(rotation);
 
             depthToColorTransform = Matrix.Identity(4, 4);
             for (int i = 0; i < 3; i++)
@@ -192,8 +203,6 @@ namespace Kinect2
 
         }
 
-
-
         public System.Drawing.PointF[] ComputeDepthFrameToCameraSpaceTable(int tableWidth = depthImageWidth, int tableHeight = depthImageHeight)
         {
             float fx = (float)depthCameraMatrix[0, 0];
@@ -212,6 +221,33 @@ namespace Kinect2
                     double framey = (double)y / (double)tableHeight * depthImageHeight;
 
                     CameraMath.Undistort(fx, fy, cx, cy, kappa, framex, (depthImageHeight - framey), out xout, out yout);
+
+                    var point = new System.Drawing.PointF();
+                    point.X = (float)xout;
+                    point.Y = (float)yout;
+                    table[tableWidth * y + x] = point;
+                }
+            return table;
+        }
+
+        public System.Drawing.PointF[] ComputeColorFrameToCameraSpaceTable(int tableWidth = colorImageWidth, int tableHeight = colorImageHeight)
+        {
+            float fx = (float)colorCameraMatrix[0, 0];
+            float fy = (float)colorCameraMatrix[1, 1];
+            float cx = (float)colorCameraMatrix[0, 2];
+            float cy = (float)colorCameraMatrix[1, 2];
+            float[] kappa = new float[] { (float)colorLensDistortion[0], (float)colorLensDistortion[1] };
+
+            var table = new System.Drawing.PointF[tableWidth * tableHeight];
+
+            for (int y = 0; y < tableHeight; y++)
+                for (int x = 0; x < tableWidth; x++)
+                {
+                    double xout, yout;
+                    double framex = (double)x / (double)tableWidth * colorImageWidth;   // in color camera image coordinates
+                    double framey = (double)y / (double)tableHeight * colorImageHeight;
+
+                    CameraMath.Undistort(fx, fy, cx, cy, kappa, framex, (colorImageHeight - framey), out xout, out yout);
 
                     var point = new System.Drawing.PointF();
                     point.X = (float)xout;
@@ -320,8 +356,7 @@ namespace Kinect2
             {
                 Matrix R, t;
                 CameraMath.DLT(cameraMatrix, distCoeffs, worldPoints, imagePoints, out R, out t);
-                //var r = Orientation.RotationVector(R);
-                var r = RoomAliveToolkit.ProjectorCameraEnsemble.RotationVectorFromRotationMatrix(R);
+                var r = CameraMath.RotationVectorFromRotationMatrix(R);
                 rotation.Copy(r);
                 translation.Copy(t);
             }
@@ -386,8 +421,7 @@ namespace Kinect2
                 t[1] = p[pi++];
                 t[2] = p[pi++];
 
-                //var R = Orientation.Rodrigues(r);
-                var R = RoomAliveToolkit.ProjectorCameraEnsemble.RotationMatrixFromRotationVector(r);
+                var R = CameraMath.RotationMatrixFromRotationVector(r);
 
 
 
@@ -448,6 +482,159 @@ namespace Kinect2
 
             return calibrate.RMSError;
         }
+
+        public void DepthImageToColorImage(double depthX, double depthY, double depthMeters, out double colorX, out double colorY)
+        {
+            double xUndistorted, yUndistorted;
+
+            // convert to depth camera space
+            float fx = (float)depthCameraMatrix[0, 0];
+            float fy = (float)depthCameraMatrix[1, 1];
+            float cx = (float)depthCameraMatrix[0, 2];
+            float cy = (float)depthCameraMatrix[1, 2];
+            float[] kappa = new float[] { (float)depthLensDistortion[0], (float)depthLensDistortion[1] };
+            // flip y because our calibration expects y up (right handed coordinates at all times)
+            CameraMath.Undistort(fx, fy, cx, cy, kappa, depthX, (depthImageHeight - depthY), out xUndistorted, out yUndistorted);
+
+            var depthCamera = new Matrix(4, 1);
+            depthCamera[0] = xUndistorted * depthMeters;
+            depthCamera[1] = yUndistorted * depthMeters;
+            depthCamera[2] = depthMeters;
+            depthCamera[3] = 1;
+
+            // convert to color camera space
+            var colorCamera = new Matrix(4, 1);
+            colorCamera.Mult(depthToColorTransform, depthCamera);
+
+            // project to color image
+            CameraMath.Project(colorCameraMatrix, colorLensDistortion, colorCamera[0], colorCamera[1], colorCamera[2], out colorX, out colorY);
+
+            // convert back to Y down
+            colorY = colorImageHeight - colorY;
+        }
+
+        public void DepthImageToColorImage(int depthX, int depthY, double depthMeters, System.Drawing.PointF[] depthFrameToCameraSpaceTable, out double colorX, out double colorY)
+        {
+            double xUndistorted, yUndistorted;
+
+            // convert to depth camera space
+            // use lookup table to perform undistortion; this will be faster when converting lots of points
+            // this matches the Kinect SDK's depthFrameToCameraSpace table (y down)
+            var point = depthFrameToCameraSpaceTable[depthY * Kinect2Calibration.depthImageWidth + depthX];
+            xUndistorted = point.X;
+            yUndistorted = point.Y;
+
+            var depthCamera = new Matrix(4, 1);
+            depthCamera[0] = xUndistorted * depthMeters;
+            depthCamera[1] = yUndistorted * depthMeters;
+            depthCamera[2] = depthMeters;
+            depthCamera[3] = 1;
+
+            // convert to color camera space
+            var colorCamera = new Matrix(4, 1);
+            colorCamera.Mult(depthToColorTransform, depthCamera);
+
+            // project to color image
+            CameraMath.Project(colorCameraMatrix, colorLensDistortion, colorCamera[0], colorCamera[1], colorCamera[2], out colorX, out colorY);
+
+            // convert back to Y down
+            colorY = colorImageHeight - colorY;
+        }
+
+        public void ColorImageToDepthImage(double colorX, double colorY, ShortImage depthImage, out Matrix depthPoint, out double depthX, out double depthY)
+        {
+            double xUndistorted, yUndistorted;
+
+            // convert to color camera space
+            float fx = (float)colorCameraMatrix[0, 0];
+            float fy = (float)colorCameraMatrix[1, 1];
+            float cx = (float)colorCameraMatrix[0, 2];
+            float cy = (float)colorCameraMatrix[1, 2];
+            float[] kappa = new float[] { (float)colorLensDistortion[0], (float)colorLensDistortion[1] };
+            // flip y because our calibration expects y up (right handed coordinates at all times)
+            CameraMath.Undistort(fx, fy, cx, cy, kappa, colorX, (colorImageHeight - colorY), out xUndistorted, out yUndistorted);
+
+            var colorToDepthTransform = new Matrix(4, 4);
+            colorToDepthTransform.Inverse(depthToColorTransform);
+
+            var colorPoint = new Matrix(4, 1);
+            depthPoint = new Matrix(4, 1);
+            depthX = 0; depthY = 0;
+
+            // walk along ray in color camera
+            bool found = false;
+            for (int s = 400; (s < 4500) && !found; s++) // TODO: confirm these limits (mm)
+            {
+                // convert to a 3D point along ray, in meters
+                colorPoint[0] = xUndistorted * s / 1000.0;
+                colorPoint[1] = yUndistorted * s / 1000.0;
+                colorPoint[2] = s / 1000.0;
+                colorPoint[3] = 1;
+
+                // transform to depth camera 3D point and project
+                depthPoint.Mult(colorToDepthTransform, colorPoint);
+                CameraMath.Project(depthCameraMatrix, depthLensDistortion, depthPoint[0], depthPoint[1], depthPoint[2], out depthX, out depthY);
+
+                int x = (int)depthX;
+                // Y down, since we are indexing into an image
+                int y = depthImageHeight - (int)depthY;
+                if ((x >= 0) && (x < depthImageWidth) && (y >= 0) && (y < depthImageHeight))
+                {
+                    int z = depthImage[x, y];
+                    if ((z != 0) && (z < s))
+                        found = true;
+                }
+            }
+            // convert back to Y down
+            depthY = depthImageHeight - depthY;
+        }
+
+        public void ColorImageToDepthImage(int colorX, int colorY, ShortImage depthImage, System.Drawing.PointF[] colorFrameToCameraSpaceTable, out Matrix depthPoint, out double depthX, out double depthY)
+        {
+            double xUndistorted, yUndistorted;
+
+            // convert to color camera space
+            // use lookup table to perform undistortion; this will be faster when converting lots of points
+            var point = colorFrameToCameraSpaceTable[colorY * Kinect2Calibration.colorImageWidth + colorX];
+            xUndistorted = point.X;
+            yUndistorted = point.Y;
+
+            var colorToDepthTransform = new Matrix(4, 4);
+            colorToDepthTransform.Inverse(depthToColorTransform);
+
+            var colorPoint = new Matrix(4, 1);
+            depthPoint = new Matrix(4, 1);
+            depthX = 0; depthY = 0;
+
+            // walk along ray in color camera
+            bool found = false;
+            for (int s = 400; (s < 4500) && !found; s++) // TODO: confirm these limits (mm)
+            {
+                // convert to a 3D point along ray, in meters
+                colorPoint[0] = xUndistorted * s / 1000.0;
+                colorPoint[1] = yUndistorted * s / 1000.0;
+                colorPoint[2] = s / 1000.0;
+                colorPoint[3] = 1;
+
+                // transform to depth camera 3D point and project
+                depthPoint.Mult(colorToDepthTransform, colorPoint);
+                CameraMath.Project(depthCameraMatrix, depthLensDistortion, depthPoint[0], depthPoint[1], depthPoint[2], out depthX, out depthY);
+
+                int x = (int)depthX;
+                // Y down, since we are indexing into an image
+                int y = depthImageHeight - (int)depthY;
+                if ((x >= 0) && (x < depthImageWidth) && (y >= 0) && (y < depthImageHeight))
+                {
+                    int z = depthImage[x, y];
+                    if ((z != 0) && (z < s))
+                        found = true;
+                }
+            }
+            // convert back to Y down
+            depthY = depthImageHeight - depthY;
+        }
+
+
 
 
     }

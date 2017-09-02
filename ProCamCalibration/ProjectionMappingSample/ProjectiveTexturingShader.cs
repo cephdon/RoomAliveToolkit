@@ -10,14 +10,9 @@ namespace RoomAliveToolkit
 {
     public class ProjectiveTexturingShader
     {
-        public const int depthImageWidth = 512;
-        public const int depthImageHeight = 424;
-        public const int colorImageWidth = 1920;
-        public const int colorImageHeight = 1080;
-
         public ProjectiveTexturingShader(Device device)
         {
-            var shaderByteCode = new ShaderBytecode(File.ReadAllBytes("Content/DepthAndProjectiveTexture.cso"));
+            var shaderByteCode = new ShaderBytecode(File.ReadAllBytes("Content/DepthAndProjectiveTextureVS.cso"));
             vertexShader = new VertexShader(device, shaderByteCode);
             geometryShader = new GeometryShader(device, new ShaderBytecode(File.ReadAllBytes("Content/DepthAndColorGS.cso")));
             pixelShader = new PixelShader(device, new ShaderBytecode(File.ReadAllBytes("Content/DepthAndColorPS.cso")));
@@ -110,7 +105,7 @@ namespace RoomAliveToolkit
         {
             deviceContext.InputAssembler.InputLayout = vertexInputLayout;
             deviceContext.InputAssembler.PrimitiveTopology = SharpDX.Direct3D.PrimitiveTopology.TriangleList;
-            deviceContext.InputAssembler.SetVertexBuffers(0, new VertexBufferBinding(vertexBuffer, VertexPosition.SizeInBytes, 0)); // bytes per vertex
+            deviceContext.InputAssembler.SetVertexBuffers(0, new VertexBufferBinding(vertexBuffer, 16, 0)); // bytes per vertex
             deviceContext.OutputMerger.SetTargets(depthStencilView, renderTargetView);
             deviceContext.OutputMerger.DepthStencilState = depthStencilState;
             deviceContext.Rasterizer.State = rasterizerState;
@@ -122,16 +117,10 @@ namespace RoomAliveToolkit
             deviceContext.PixelShader.Set(pixelShader);
             deviceContext.PixelShader.SetShaderResource(0, colorImageTextureRV);
             deviceContext.PixelShader.SetSampler(0, colorSamplerState);
-            deviceContext.Draw((depthImageWidth - 1) * (depthImageHeight - 1) * 6, 0);
+            deviceContext.Draw((Kinect2Calibration.depthImageWidth - 1) * (Kinect2Calibration.depthImageHeight - 1) * 6, 0);
 
             deviceContext.VertexShader.SetShaderResource(0, null); // to avoid warnings when these are later set as render targets
             deviceContext.PixelShader.SetShaderResource(0, null);
-        }
-
-        struct VertexPosition
-        {
-            public SharpDX.Vector4 position;
-            static public int SizeInBytes { get { return 4 * 4; } }
         }
 
         VertexShader vertexShader;
